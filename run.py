@@ -43,6 +43,3 @@ def add_page_numbers_to_pdf(input_pdf_path: str, output_pdf_path: str, footer_te
         writer.write(output_file)
     
     print(f"PDF with page numbers saved to {output_pdf_path}")
-
-# Usage
-add_page_numbers_to_pdf('downloads/Thing of Things.pdf', 'output.pdf', '')
