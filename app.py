@@ -15,13 +15,13 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from io import BytesIO
 from utils import add_start_pages, add_end_pages
-
+from werkzeug.middleware.proxy_fix import ProxyFix
 # -------------------------
 # App + logging setup
 # -------------------------
 
 app = Flask(__name__)
-
+app = ProxyFix(app, x_for=1, x_host=1) if os.environ.get("FLASK_ENV") == "production" else app
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
