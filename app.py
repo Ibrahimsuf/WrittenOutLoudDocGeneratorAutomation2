@@ -270,6 +270,7 @@ def index():
         meta = drive.files().get(
             fileId=doc_id,
             fields="name,mimeType",
+            supportsAllDrives=True
         ).execute()
 
         if meta["mimeType"] != "application/vnd.google-apps.document":
