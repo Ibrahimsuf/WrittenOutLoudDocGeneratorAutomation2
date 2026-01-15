@@ -14,7 +14,7 @@ from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from io import BytesIO
-from utils import add_start_pages, add_end_pages
+from utils import add_start_pages
 from werkzeug.middleware.proxy_fix import ProxyFix
 # -------------------------
 # App + logging setup
@@ -281,7 +281,7 @@ def index():
 
         temp_doc_id = copy_document(drive, doc_id, f"{file_name} (PDF Copy)")
         delete_before_second_page_break(docs, temp_doc_id)
-        add_header(docs, temp_doc_id, title)
+        # add_header(docs, temp_doc_id, title)
         time.sleep(2)
 
         export_req = drive.files().export_media(
@@ -306,11 +306,6 @@ def index():
             dedication,
             "Start Pages",
         )
-        end_id = add_end_pages(
-            SERVICE_ACCOUNT_FILE,
-            title,
-            "End Pages",
-        )
 
         def export(doc_id):
             buf = io.BytesIO()
@@ -328,9 +323,9 @@ def index():
                 abort(500, "Generated PDF is empty")
             buf.seek(0)
             return buf
-
+        
         merged = merge_pdf_buffers(
-            [export(start_id), pdf_buffer, export(end_id)]
+            [export(start_id), pdf_buffer, open("end_pages.pdf", "rb")]
         )
 
         os.makedirs(OUTPUT_DIR, exist_ok=True)

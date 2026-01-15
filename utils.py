@@ -6,6 +6,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from io import BytesIO
+from datetime import datetime
 
 START_PAGES_ID = "1niKJyWqADraNMjGoAiyiUgqwOnO-2o0_n219_zr8Tug"
 END_PAGES_ID="1PGth0S9u1dCF-fb-qQkscfWDYNl1GKZaAK_J9Pr3CSQ"
@@ -128,6 +129,15 @@ def add_start_pages(
                     "matchCase": True,
                 },
                 "replaceText": dedication,
+            }
+        },
+        {
+            "replaceAllText": {
+                "containsText": {
+                    "text": "{{year}}",
+                    "matchCase": True,
+                },
+                "replaceText": str(datetime.now().year),
             }
         }
     ]
