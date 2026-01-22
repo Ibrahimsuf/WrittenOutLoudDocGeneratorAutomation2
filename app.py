@@ -1,8 +1,9 @@
-from flask import Flask, request, abort, render_template, send_file
+from flask import Flask, request, abort, render_template, send_file, flash
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from googleapiclient.errors import HttpError
+from googleapiclient.http import MediaFileUpload
 import io
 import re
 import os
@@ -21,7 +22,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 # -------------------------
 
 app = Flask(__name__)
-app = ProxyFix(app, x_for=1, x_host=1) if os.environ.get("FLASK_ENV") == "production" else app
+app.secret_key = os.environ.get("FLASK_SECRET_KEY")
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
@@ -39,7 +40,7 @@ SCOPES = [
 SERVICE_ACCOUNT_FILE = "service_account.json"
 OUTPUT_DIR = "downloads"
 SHARED_FOLDER_ID = "0AE0YZ4clOzQ7Uk9PVA"
-
+PDF_DRIVES_ID = "0AMAep1gMANZ_Uk9PVA"
 # -------------------------
 # Helpers
 # -------------------------
@@ -221,6 +222,7 @@ def delete_before_second_page_break(docs, doc_id: str):
 
 @app.route("/", methods=["GET", "POST"])
 def index():
+    print(app.secret_key)
     if request.method == "GET":
         return render_template("form.html")
 
@@ -337,7 +339,22 @@ def index():
         add_page_numbers_to_pdf(output_path, output_path)
 
         logger.info("PDF generated successfully", extra={"path": output_path})
+        file_metadata = {
+                "name": f"{file_name}.pdf",
+                "parents": [PDF_DRIVES_ID],
+        }
+        media = MediaFileUpload(
+            output_path,
+            mimetype="application/pdf",
+            resumable=True,
+        )
 
+        file = drive.files().create(
+            body=file_metadata,
+            media_body=media,
+            supportsAllDrives=True,
+        ).execute()
+        flash("Saved successfully", "success")
         return send_file(
             output_path,
             mimetype="application/pdf",
