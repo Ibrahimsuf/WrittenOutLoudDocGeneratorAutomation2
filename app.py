@@ -248,6 +248,7 @@ def index():
     storyteller_names = sorted(data.get("storyteller_names", []))
     storyteller_names_str = ", ".join(storyteller_names)
     director_name = data.get("director_name", [""])[0]
+    crew_id = data.get("crew_id", [""])[0]
     dedication = data.get("dedication", [""])[0]
 
     logger.info(
@@ -257,6 +258,7 @@ def index():
             "title": title,
             "storyteller_names": storyteller_names_str,
             "director_name": director_name,
+            "crew_id": crew_id,
             "dedication_length": len(dedication),
         },
     )
@@ -305,6 +307,7 @@ def index():
             title,
             storyteller_names_str,
             director_name,
+            crew_id,
             dedication,
             "Start Pages",
         )

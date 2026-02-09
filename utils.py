@@ -73,6 +73,7 @@ def add_start_pages(
     title: str,
     storyteller_names: str,
     director_name: str,
+    crew_id: str,
     dedication: str,
     new_doc_name: str,
 ) -> str:
@@ -120,6 +121,15 @@ def add_start_pages(
                     "matchCase": True,
                 },
                 "replaceText": director_name,
+            }
+        },
+        {
+            "replaceAllText": {
+                "containsText": {
+                    "text": "{{crew_id}}",
+                    "matchCase": True,
+                },
+                "replaceText": crew_id,
             }
         },
         {
