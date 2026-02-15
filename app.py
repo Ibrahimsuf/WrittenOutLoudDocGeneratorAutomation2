@@ -99,46 +99,84 @@ def copy_document(drive, doc_id: str, new_name: str) -> str:
     return copied["id"]
 
 
-def add_page_numbers_to_pdf(input_pdf_path: str, output_pdf_path: str):
-    reader = PdfReader(input_pdf_path)
-    writer = PdfWriter()
 
+def add_page_numbers_to_pdf(input_pdf_path: str, output_pdf_path: str):
+    # Register font (globally needed for reportlab to find it)
     pdfmetrics.registerFont(
         TTFont("Lora-Italic", "Lora/static/Lora-Italic.ttf")
     )
 
-    for page_num, page in enumerate(reader.pages, start=1):
-        if page_num == 1:
-            writer.add_page(page)
-            continue
+    reader_initial = PdfReader(input_pdf_path)
+    total_pages = len(reader_initial.pages)
+    # Explicitly close or just let it go out of scope. 
+    # PdfReader in some versions doesn't verify file closure if path is string, but it's safe to just drop it.
+    del reader_initial
 
-        w = float(page.mediabox.width)
-        h = float(page.mediabox.height)
+    batch_size = 50
+    temp_files = []
 
-        packet = BytesIO()
-        can = canvas.Canvas(packet, pagesize=(w, h))
-        can.setFont("Lora-Italic", 9)
+    try:
+        for batch_start in range(0, total_pages, batch_size):
+            batch_end = min(batch_start + batch_size, total_pages)
+            
+            # Re-open reader for each batch to ensure memory is cleared
+            reader = PdfReader(input_pdf_path)
+            writer = PdfWriter()
 
-        text = str(page_num)
-        x = (w - can.stringWidth(text, "Lora-Italic", 9)) / 2
-        y = 30
+            for i in range(batch_start, batch_end):
+                page = reader.pages[i]
+                page_num = i + 1
 
-        can.drawString(x, y, text)
-        can.save()
+                if page_num == 1:
+                    writer.add_page(page)
+                    continue
 
-        packet.seek(0)
-        overlay = PdfReader(packet)
-        page.merge_page(overlay.pages[0])
-        writer.add_page(page)
+                w = float(page.mediabox.width)
+                h = float(page.mediabox.height)
 
-    # Write to a temporary file first to prevent issues when input == output
-    # creates a temporary file that is not automatically deleted on close
-    with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-        writer.write(tmp_file)
-        temp_path = tmp_file.name
+                packet = BytesIO()
+                can = canvas.Canvas(packet, pagesize=(w, h))
+                can.setFont("Lora-Italic", 9)
+                
+                text = str(page_num)
+                text_width = can.stringWidth(text, "Lora-Italic", 9)
+                x = (w - text_width) / 2
+                y = 30
 
-    # Move the temporary file to the output path
-    shutil.move(temp_path, output_pdf_path)
+                can.drawString(x, y, text)
+                can.save()
+
+                packet.seek(0)
+                overlay = PdfReader(packet)
+                page.merge_page(overlay.pages[0])
+                writer.add_page(page)
+
+            # Write batch to temp file
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_batch:
+                writer.write(tmp_batch)
+                temp_files.append(tmp_batch.name)
+            
+            # Ensure resources are freed
+            del writer
+            del reader
+
+        # Merge all batches
+        merger = PdfMerger()
+        for tmp_file in temp_files:
+            merger.append(tmp_file)
+        
+        merger.write(output_pdf_path)
+        merger.close()
+
+    finally:
+        # Cleanup temp files
+        for tmp_file in temp_files:
+            try:
+                if os.path.exists(tmp_file):
+                    os.remove(tmp_file)
+            except Exception as e:
+                logger.warning(f"Failed to delete temp file {tmp_file}: {e}")
+
 
 def add_header(docs, doc_id: str, header_text: str):
     # Create header
