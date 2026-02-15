@@ -20,6 +20,7 @@ from io import BytesIO
 from utils import add_start_pages
 from werkzeug.middleware.proxy_fix import ProxyFix
 from math import ceil
+
 # -------------------------
 # App + logging setup
 # -------------------------
@@ -99,85 +100,57 @@ def copy_document(drive, doc_id: str, new_name: str) -> str:
     logger.info("Created document copy", extra={"doc_id": copied["id"]})
     return copied["id"]
 
-
-
 def add_page_numbers_to_pdf(input_pdf_path: str, output_pdf_path: str):
     pdfmetrics.registerFont(
         TTFont("Lora-Italic", "Lora/static/Lora-Italic.ttf")
     )
     
-    # Get total pages once
+    # Create all overlays FIRST as a single PDF
     with open(input_pdf_path, 'rb') as f:
-        reader_initial = PdfReader(f)
-        total_pages = len(reader_initial.pages)
+        reader = PdfReader(f)
+        total_pages = len(reader.pages)
+        page_dimensions = [(float(p.mediabox.width), float(p.mediabox.height)) 
+                          for p in reader.pages]
     
-    file_size = os.path.getsize(input_pdf_path)
-    batch_size = ceil(file_size / 10 * 1024 * 1024)
-    temp_files = []
+    # Create overlay PDF with all page numbers
+    overlay_packet = BytesIO()
+    can = canvas.Canvas(overlay_packet)
     
-    try:
-        for batch_start in range(0, total_pages, batch_size):
-            batch_end = min(batch_start + batch_size, total_pages)
-            
-            writer = PdfWriter()
-            
-            # Use clone_from to extract only the pages we need
-            with open(input_pdf_path, 'rb') as f:
-                reader = PdfReader(f)
-                
-                for i in range(batch_start, batch_end):
-                    page = reader.pages[i]
-                    page_num = i + 1
-                    
-                    if page_num == 1:
-                        writer.add_page(page)
-                        continue
-                    
-                    w = float(page.mediabox.width)
-                    h = float(page.mediabox.height)
-                    
-                    # Create overlay
-                    packet = BytesIO()
-                    can = canvas.Canvas(packet, pagesize=(w, h))
-                    can.setFont("Lora-Italic", 9)
-                    text = str(page_num)
-                    text_width = can.stringWidth(text, "Lora-Italic", 9)
-                    x = (w - text_width) / 2
-                    y = 30
-                    can.drawString(x, y, text)
-                    can.save()
-                    
-                    packet.seek(0)
-                    overlay = PdfReader(packet)
-                    page.merge_page(overlay.pages[0])
-                    writer.add_page(page)
-                    
-                    # Clean up overlay immediately
-                    del overlay
-                    packet.close()
-            
-            # Write batch to temp file
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_batch:
-                writer.write(tmp_batch)
-                temp_files.append(tmp_batch.name)
-            
-            del writer
+    for i in range(total_pages):
+        page_num = i + 1
+        w, h = page_dimensions[i]
         
-        # Merge all batches
-        merger = PdfMerger()
-        for tmp_file in temp_files:
-            merger.append(tmp_file)
-        merger.write(output_pdf_path)
-        merger.close()
+        can.setPageSize((w, h))
         
-    finally:
-        for tmp_file in temp_files:
-            try:
-                if os.path.exists(tmp_file):
-                    os.remove(tmp_file)
-            except Exception as e:
-                logger.warning(f"Failed to delete temp file {tmp_file}: {e}")
-
+        if page_num > 1:  # Skip first page
+            can.setFont("Lora-Italic", 9)
+            text = str(page_num)
+            text_width = can.stringWidth(text, "Lora-Italic", 9)
+            x = (w - text_width) / 2
+            y = 30
+            can.drawString(x, y, text)
+        
+        can.showPage()
+    
+    can.save()
+    overlay_packet.seek(0)
+    
+    # Now merge in one pass
+    overlay_reader = PdfReader(overlay_packet)
+    
+    writer = PdfWriter()
+    with open(input_pdf_path, 'rb') as f:
+        reader = PdfReader(f)
+        
+        for i, page in enumerate(reader.pages):
+            if i > 0:  # Has page number
+                page.merge_page(overlay_reader.pages[i])
+            writer.add_page(page)
+    
+    with open(output_pdf_path, 'wb') as output_file:
+        writer.write(output_file)
+    
+    overlay_packet.close()
 def add_header(docs, doc_id: str, header_text: str):
     # Create header
     response = docs.documents().batchUpdate(
