@@ -101,82 +101,80 @@ def copy_document(drive, doc_id: str, new_name: str) -> str:
 
 
 def add_page_numbers_to_pdf(input_pdf_path: str, output_pdf_path: str):
-    # Register font (globally needed for reportlab to find it)
     pdfmetrics.registerFont(
         TTFont("Lora-Italic", "Lora/static/Lora-Italic.ttf")
     )
-
-    reader_initial = PdfReader(input_pdf_path)
-    total_pages = len(reader_initial.pages)
-    # Explicitly close or just let it go out of scope. 
-    # PdfReader in some versions doesn't verify file closure if path is string, but it's safe to just drop it.
-    del reader_initial
-
+    
+    # Get total pages once
+    with open(input_pdf_path, 'rb') as f:
+        reader_initial = PdfReader(f)
+        total_pages = len(reader_initial.pages)
+    
     batch_size = 50
     temp_files = []
-
+    
     try:
         for batch_start in range(0, total_pages, batch_size):
             batch_end = min(batch_start + batch_size, total_pages)
             
-            # Re-open reader for each batch to ensure memory is cleared
-            reader = PdfReader(input_pdf_path)
             writer = PdfWriter()
-
-            for i in range(batch_start, batch_end):
-                page = reader.pages[i]
-                page_num = i + 1
-
-                if page_num == 1:
-                    writer.add_page(page)
-                    continue
-
-                w = float(page.mediabox.width)
-                h = float(page.mediabox.height)
-
-                packet = BytesIO()
-                can = canvas.Canvas(packet, pagesize=(w, h))
-                can.setFont("Lora-Italic", 9)
+            
+            # Use clone_from to extract only the pages we need
+            with open(input_pdf_path, 'rb') as f:
+                reader = PdfReader(f)
                 
-                text = str(page_num)
-                text_width = can.stringWidth(text, "Lora-Italic", 9)
-                x = (w - text_width) / 2
-                y = 30
-
-                can.drawString(x, y, text)
-                can.save()
-
-                packet.seek(0)
-                overlay = PdfReader(packet)
-                page.merge_page(overlay.pages[0])
-                writer.add_page(page)
-
+                for i in range(batch_start, batch_end):
+                    page = reader.pages[i]
+                    page_num = i + 1
+                    
+                    if page_num == 1:
+                        writer.add_page(page)
+                        continue
+                    
+                    w = float(page.mediabox.width)
+                    h = float(page.mediabox.height)
+                    
+                    # Create overlay
+                    packet = BytesIO()
+                    can = canvas.Canvas(packet, pagesize=(w, h))
+                    can.setFont("Lora-Italic", 9)
+                    text = str(page_num)
+                    text_width = can.stringWidth(text, "Lora-Italic", 9)
+                    x = (w - text_width) / 2
+                    y = 30
+                    can.drawString(x, y, text)
+                    can.save()
+                    
+                    packet.seek(0)
+                    overlay = PdfReader(packet)
+                    page.merge_page(overlay.pages[0])
+                    writer.add_page(page)
+                    
+                    # Clean up overlay immediately
+                    del overlay
+                    packet.close()
+            
             # Write batch to temp file
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_batch:
                 writer.write(tmp_batch)
                 temp_files.append(tmp_batch.name)
             
-            # Ensure resources are freed
             del writer
-            del reader
-
+        
         # Merge all batches
         merger = PdfMerger()
         for tmp_file in temp_files:
             merger.append(tmp_file)
-        
         merger.write(output_pdf_path)
         merger.close()
-
+        
     finally:
-        # Cleanup temp files
         for tmp_file in temp_files:
             try:
                 if os.path.exists(tmp_file):
                     os.remove(tmp_file)
             except Exception as e:
                 logger.warning(f"Failed to delete temp file {tmp_file}: {e}")
-
 
 def add_header(docs, doc_id: str, header_text: str):
     # Create header
