@@ -19,6 +19,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from io import BytesIO
 from utils import add_start_pages
 from werkzeug.middleware.proxy_fix import ProxyFix
+from math import ceil
 # -------------------------
 # App + logging setup
 # -------------------------
@@ -110,7 +111,8 @@ def add_page_numbers_to_pdf(input_pdf_path: str, output_pdf_path: str):
         reader_initial = PdfReader(f)
         total_pages = len(reader_initial.pages)
     
-    batch_size = 50
+    file_size = os.path.getsize(input_pdf_path)
+    batch_size = ceil(file_size / 10 * 1024 * 1024)
     temp_files = []
     
     try:
