@@ -7,6 +7,8 @@ from googleapiclient.http import MediaFileUpload
 import io
 import re
 import os
+import shutil
+import tempfile
 import time
 import logging
 from typing import Iterable
@@ -129,8 +131,14 @@ def add_page_numbers_to_pdf(input_pdf_path: str, output_pdf_path: str):
         page.merge_page(overlay.pages[0])
         writer.add_page(page)
 
-    with open(output_pdf_path, "wb") as f:
-        writer.write(f)
+    # Write to a temporary file first to prevent issues when input == output
+    # creates a temporary file that is not automatically deleted on close
+    with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+        writer.write(tmp_file)
+        temp_path = tmp_file.name
+
+    # Move the temporary file to the output path
+    shutil.move(temp_path, output_pdf_path)
 
 def add_header(docs, doc_id: str, header_text: str):
     # Create header
