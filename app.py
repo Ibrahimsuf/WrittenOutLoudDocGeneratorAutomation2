@@ -239,6 +239,100 @@ def delete_before_second_page_break(docs, doc_id: str):
 # Routes
 # -------------------------
 
+def generate_pdf(url, title, storyteller_names_str, director_name, crew_id, dedication):
+    """Generate a merged PDF from a Google Doc URL and metadata."""
+    doc_id = extract_doc_id(url)
+    drive = drive_client()
+    docs = docs_client()
+
+    meta = drive.files().get(
+        fileId=doc_id,
+        fields="name,mimeType",
+        supportsAllDrives=True
+    ).execute()
+
+    if meta["mimeType"] != "application/vnd.google-apps.document":
+        abort(400, "File is not a Google Doc")
+
+    file_name = meta["name"]
+    logger.info("Processing document", extra={"file_name": file_name})
+
+    temp_doc_id = copy_document(drive, doc_id, f"{file_name} (PDF Copy)")
+    delete_before_second_page_break(docs, temp_doc_id)
+    time.sleep(2)
+
+    export_req = drive.files().export_media(
+        fileId=temp_doc_id,
+        mimeType="application/pdf",
+    )
+
+    pdf_buffer = io.BytesIO()
+    downloader = MediaIoBaseDownload(pdf_buffer, export_req)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+
+    if pdf_buffer.getbuffer().nbytes == 0:
+        abort(500, "Generated PDF is empty")
+
+    start_id = add_start_pages(
+        SERVICE_ACCOUNT_FILE,
+        title,
+        storyteller_names_str,
+        director_name,
+        crew_id,
+        dedication,
+        "Start Pages",
+    )
+
+    def export(doc_id):
+        buf = io.BytesIO()
+        dl = MediaIoBaseDownload(
+            buf,
+            drive.files().export_media(
+                fileId=doc_id,
+                mimeType="application/pdf",
+            ),
+        )
+        done = False
+        while not done:
+            _, done = dl.next_chunk()
+        if buf.getbuffer().nbytes == 0:
+            abort(500, "Generated PDF is empty")
+        buf.seek(0)
+        return buf
+
+    merged = merge_pdf_buffers(
+        [export(start_id), pdf_buffer, open("end_pages.pdf", "rb")]
+    )
+
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    output_path = os.path.join(OUTPUT_DIR, f"{file_name}.pdf")
+
+    with open(output_path, "wb") as f:
+        f.write(merged.getvalue())
+
+    add_page_numbers_to_pdf(output_path, output_path)
+    logger.info("PDF generated successfully", extra={"path": output_path})
+
+    file_metadata = {
+        "name": f"{file_name}.pdf",
+        "parents": [PDF_DRIVES_ID],
+    }
+    media = MediaFileUpload(
+        output_path,
+        mimetype="application/pdf",
+        resumable=True,
+    )
+    drive.files().create(
+        body=file_metadata,
+        media_body=media,
+        supportsAllDrives=True,
+    ).execute()
+
+    return output_path
+
+
 @app.route("/", methods=["GET", "POST"])
 def index():
     print(app.secret_key)
@@ -286,96 +380,9 @@ def index():
         abort(400, "Missing 'url' field")
 
     try:
-        doc_id = extract_doc_id(url)
-        drive = drive_client()
-        docs = docs_client()
-
-        meta = drive.files().get(
-            fileId=doc_id,
-            fields="name,mimeType",
-            supportsAllDrives=True
-        ).execute()
-
-        if meta["mimeType"] != "application/vnd.google-apps.document":
-            abort(400, "File is not a Google Doc")
-
-        file_name = meta["name"]
-        logger.info("Processing document", extra={"file_name": file_name})
-
-        temp_doc_id = copy_document(drive, doc_id, f"{file_name} (PDF Copy)")
-        delete_before_second_page_break(docs, temp_doc_id)
-        # add_header(docs, temp_doc_id, title)
-        time.sleep(2)
-
-        export_req = drive.files().export_media(
-            fileId=temp_doc_id,
-            mimeType="application/pdf",
+        output_path = generate_pdf(
+            url, title, storyteller_names_str, director_name, crew_id, dedication
         )
-
-        pdf_buffer = io.BytesIO()
-        downloader = MediaIoBaseDownload(pdf_buffer, export_req)
-        done = False
-        while not done:
-            _, done = downloader.next_chunk()
-
-        if pdf_buffer.getbuffer().nbytes == 0:
-            abort(500, "Generated PDF is empty")
-
-        start_id = add_start_pages(
-            SERVICE_ACCOUNT_FILE,
-            title,
-            storyteller_names_str,
-            director_name,
-            crew_id,
-            dedication,
-            "Start Pages",
-        )
-
-        def export(doc_id):
-            buf = io.BytesIO()
-            dl = MediaIoBaseDownload(
-                buf,
-                drive.files().export_media(
-                    fileId=doc_id,
-                    mimeType="application/pdf",
-                ),
-            )
-            done = False
-            while not done:
-                _, done = dl.next_chunk()
-            if buf.getbuffer().nbytes == 0:
-                abort(500, "Generated PDF is empty")
-            buf.seek(0)
-            return buf
-        
-        merged = merge_pdf_buffers(
-            [export(start_id), pdf_buffer, open("end_pages.pdf", "rb")]
-        )
-
-        os.makedirs(OUTPUT_DIR, exist_ok=True)
-        output_path = os.path.join(OUTPUT_DIR, f"{file_name}.pdf")
-
-        with open(output_path, "wb") as f:
-            f.write(merged.getvalue())
-
-        add_page_numbers_to_pdf(output_path, output_path)
-
-        logger.info("PDF generated successfully", extra={"path": output_path})
-        file_metadata = {
-                "name": f"{file_name}.pdf",
-                "parents": [PDF_DRIVES_ID],
-        }
-        media = MediaFileUpload(
-            output_path,
-            mimetype="application/pdf",
-            resumable=True,
-        )
-
-        file = drive.files().create(
-            body=file_metadata,
-            media_body=media,
-            supportsAllDrives=True,
-        ).execute()
         flash("Saved successfully", "success")
         return send_file(
             output_path,
@@ -394,7 +401,6 @@ def index():
     except Exception:
         logger.exception("Unhandled error during PDF generation")
         abort(500, "Internal server error")
-
-
+        
 if __name__ == "__main__":
     app.run(debug=True)
