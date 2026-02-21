@@ -70,8 +70,8 @@ def docs_client():
 
 def copy_document(drive, doc_id: str, new_name: str) -> str:
     body = {"name": new_name}
-    if SHARED_FOLDER_ID:
-        body["parents"] = [SHARED_FOLDER_ID]
+    if PDF_DRIVES_ID:
+        body["parents"] = [PDF_DRIVES_ID]
 
     copied = drive.files().copy(
         fileId=doc_id,
