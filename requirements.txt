@@ -2,7 +2,7 @@ Flask
 google-api-python-client
 google-auth
 google-auth-httplib2
-PyPDF2
+pdfrw
 reportlab
 werkzeug
 gunicorn
