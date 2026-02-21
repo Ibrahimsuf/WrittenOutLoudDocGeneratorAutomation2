@@ -7,19 +7,15 @@ from googleapiclient.http import MediaFileUpload
 import io
 import re
 import os
-import shutil
-import tempfile
 import time
 import logging
 from typing import Iterable
-from PyPDF2 import PdfMerger, PdfReader, PdfWriter
-from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from io import BytesIO
-from utils import add_start_pages
-from werkzeug.middleware.proxy_fix import ProxyFix
+from utils import add_start_pages, add_page_numbers_to_pdf
 from math import ceil
+from pdfrw import PdfReader, PdfWriter, PageMerge
 
 # -------------------------
 # App + logging setup
@@ -45,6 +41,7 @@ SERVICE_ACCOUNT_FILE = "service_account.json"
 OUTPUT_DIR = "downloads"
 SHARED_FOLDER_ID = "0AE0YZ4clOzQ7Uk9PVA"
 PDF_DRIVES_ID = "0AMAep1gMANZ_Uk9PVA"
+
 # -------------------------
 # Helpers
 # -------------------------
@@ -71,21 +68,6 @@ def docs_client():
     return build("docs", "v1", credentials=get_credentials())
 
 
-def merge_pdf_buffers(buffers: Iterable[io.BytesIO]) -> io.BytesIO:
-    merger = PdfMerger()
-    for buf in buffers:
-        if not buf:
-            continue
-        buf.seek(0)
-        merger.append(buf)
-
-    out = io.BytesIO()
-    merger.write(out)
-    merger.close()
-    out.seek(0)
-    return out
-
-
 def copy_document(drive, doc_id: str, new_name: str) -> str:
     body = {"name": new_name}
     if SHARED_FOLDER_ID:
@@ -100,140 +82,36 @@ def copy_document(drive, doc_id: str, new_name: str) -> str:
     logger.info("Created document copy", extra={"doc_id": copied["id"]})
     return copied["id"]
 
-def add_page_numbers_to_pdf(input_pdf_path: str, output_pdf_path: str):
-    pdfmetrics.registerFont(
-        TTFont("Lora-Italic", "Lora/static/Lora-Italic.ttf")
-    )
-    
-    # Create all overlays FIRST as a single PDF
-    with open(input_pdf_path, 'rb') as f:
-        reader = PdfReader(f)
-        total_pages = len(reader.pages)
-        page_dimensions = [(float(p.mediabox.width), float(p.mediabox.height)) 
-                          for p in reader.pages]
-    
-    # Create overlay PDF with all page numbers
-    overlay_packet = BytesIO()
-    can = canvas.Canvas(overlay_packet)
-    
-    for i in range(total_pages):
-        page_num = i + 1
-        w, h = page_dimensions[i]
-        
-        can.setPageSize((w, h))
-        
-        if page_num > 1:  # Skip first page
-            can.setFont("Lora-Italic", 9)
-            text = str(page_num)
-            text_width = can.stringWidth(text, "Lora-Italic", 9)
-            x = (w - text_width) / 2
-            y = 30
-            can.drawString(x, y, text)
-        
-        can.showPage()
-    
-    can.save()
-    overlay_packet.seek(0)
-    
-    # Now merge in one pass
-    overlay_reader = PdfReader(overlay_packet)
-    
-    writer = PdfWriter()
-    with open(input_pdf_path, 'rb') as f:
-        reader = PdfReader(f)
-        
-        for i, page in enumerate(reader.pages):
-            if i > 0:  # Has page number
-                page.merge_page(overlay_reader.pages[i])
-            writer.add_page(page)
-    
-    with open(output_pdf_path, 'wb') as output_file:
-        writer.write(output_file)
-    
-    overlay_packet.close()
-def add_header(docs, doc_id: str, header_text: str):
-    # Create header
-    response = docs.documents().batchUpdate(
-        documentId=doc_id,
-        body={"requests": [{"createHeader": {"type": "DEFAULT"}}]},
-    ).execute()
 
-    header_id = response["replies"][0]["createHeader"]["headerId"]
-
-    # Insert header text and apply styles
-    docs.documents().batchUpdate(
-        documentId=doc_id,
-        body={
-            "requests": [
-                {
-                    "insertText": {
-                        "location": {"segmentId": header_id, "index": 0},
-                        "text": header_text,
-                    }
-                },
-                {
-                    "updateTextStyle": {
-                        "range": {
-                            "segmentId": header_id,
-                            "startIndex": 0,
-                            "endIndex": len(header_text),
-                        },
-                        "textStyle": {
-                            "weightedFontFamily": {"fontFamily": "Lora"},
-                            "fontSize": {"magnitude": 9, "unit": "PT"},
-                            "italic": True,
-                        },
-                        "fields": "weightedFontFamily,fontSize,italic",
-                    }
-                },
-                {
-                    "updateParagraphStyle": {
-                        "range": {
-                            "segmentId": header_id,
-                            "startIndex": 0,
-                            "endIndex": len(header_text),
-                        },
-                        "paragraphStyle": {"alignment": "CENTER"},
-                        "fields": "alignment",
-                    }
-                },
-            ]
-        },
-    ).execute()
-
-    logger.info("Header added", extra={"doc_id": doc_id})
 def delete_before_second_page_break(docs, doc_id: str):
-    # Get the document content
     doc = docs.documents().get(documentId=doc_id).execute()
     content = doc.get("body", {}).get("content", [])
 
     page_break_indices = []
-    
-    # Walk through elements to find page breaks
+
     for element in content:
         if "paragraph" in element:
             for elem in element["paragraph"].get("elements", []):
                 if "pageBreak" in elem:
                     page_break_indices.append(elem["startIndex"])
-    
+
     if len(page_break_indices) < 2:
-        print("Less than 2 page breaks found; nothing deleted.")
+        logger.info("Less than 2 page breaks found; nothing deleted.")
         return
 
-    # Delete everything before the second page break
     requests = [
         {
             "deleteContentRange": {
                 "range": {
                     "startIndex": 1,
-                    "endIndex": page_break_indices[1],  # up to second page break
+                    "endIndex": page_break_indices[1],
                 }
             }
         }
     ]
 
     docs.documents().batchUpdate(documentId=doc_id, body={"requests": requests}).execute()
-    print("Deleted content before second page break.")
+    logger.info("Deleted content before second page break.")
 
 # -------------------------
 # Routes
@@ -302,15 +180,17 @@ def generate_pdf(url, title, storyteller_names_str, director_name, crew_id, dedi
         buf.seek(0)
         return buf
 
-    merged = merge_pdf_buffers(
-        [export(start_id), pdf_buffer, open("end_pages.pdf", "rb")]
-    )
+    start_buf = export(start_id)
+    pdf_buffer.seek(0)
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     output_path = os.path.join(OUTPUT_DIR, f"{file_name}.pdf")
 
-    with open(output_path, "wb") as f:
-        f.write(merged.getvalue())
+    writer = PdfWriter()
+    for buf in [start_buf, pdf_buffer, open("end_pages.pdf", "rb")]:
+        reader = PdfReader(buf)
+        writer.addpages(reader.pages)
+    writer.write(output_path)
 
     add_page_numbers_to_pdf(output_path, output_path)
     logger.info("PDF generated successfully", extra={"path": output_path})
@@ -335,7 +215,6 @@ def generate_pdf(url, title, storyteller_names_str, director_name, crew_id, dedi
 
 @app.route("/", methods=["GET", "POST"])
 def index():
-    print(app.secret_key)
     if request.method == "GET":
         return render_template("form.html")
 
@@ -349,7 +228,6 @@ def index():
 
     data = request.form.to_dict(flat=False)
 
-    # sanitize
     for k, v in data.items():
         data[k] = [
             x.replace("\r\n", "\n").replace("\r", "\n") if isinstance(x, str) else x
@@ -395,12 +273,12 @@ def index():
             "Google API error",
             extra={"status": e.resp.status, "error": str(e)},
         )
-        logger.error(str(e))
         abort(e.resp.status, "Google API error")
 
     except Exception:
         logger.exception("Unhandled error during PDF generation")
         abort(500, "Internal server error")
-        
+
+
 if __name__ == "__main__":
     app.run(debug=True)
