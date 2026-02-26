@@ -16,6 +16,8 @@ from io import BytesIO
 from utils import add_start_pages, add_page_numbers_to_pdf
 from math import ceil
 from pdfrw import PdfReader, PdfWriter, PageMerge
+import requests
+from google.auth.transport.requests import Request
 
 # -------------------------
 # App + logging setup
@@ -139,19 +141,29 @@ def generate_pdf(url, title, storyteller_names_str, director_name, crew_id, dedi
     delete_before_second_page_break(docs, temp_doc_id)
     time.sleep(2)
 
-    export_req = drive.files().export_media(
+    file = drive.files().get(
         fileId=temp_doc_id,
-        mimeType="application/pdf",
-    )
+        fields="exportLinks",
+        supportsAllDrives=True
+    ).execute()
 
-    pdf_buffer = io.BytesIO()
-    downloader = MediaIoBaseDownload(pdf_buffer, export_req)
-    done = False
-    while not done:
-        _, done = downloader.next_chunk()
+    pdf_url = file["exportLinks"]["application/pdf"]
+    logger.info("Generated PDF", extra={"pdf_url": pdf_url})
 
-    if pdf_buffer.getbuffer().nbytes == 0:
-        abort(500, "Generated PDF is empty")
+    credentials = get_credentials()
+    token = credentials.token
+    if not token:
+            credentials.refresh(Request())
+            token = credentials.token
+    headers = {
+        "Authorization": f"Bearer {token}",
+    }
+
+    response = requests.get(pdf_url, headers=headers)
+    response.raise_for_status()
+    # save response content to a file
+    with open("temp.pdf", "wb") as f:
+        f.write(response.content)
 
     start_id = add_start_pages(
         SERVICE_ACCOUNT_FILE,
@@ -181,6 +193,9 @@ def generate_pdf(url, title, storyteller_names_str, director_name, crew_id, dedi
         return buf
 
     start_buf = export(start_id)
+    with open("temp.pdf", "rb") as f:
+        pdf_buffer = io.BytesIO(f.read())
+
     pdf_buffer.seek(0)
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
